@@ -2,15 +2,15 @@ import express from "express";
 import cors from "cors";
 import Database from "better-sqlite3";
 import { z } from "zod";
-import bcrypt from "bcryptjs";        // 👈 NUEVO
-import jwt from "jsonwebtoken";       // 👈 NUEVO
+import bcrypt from "bcryptjs";        
+import jwt from "jsonwebtoken";       
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const TOTAL_SPOTS = 18;
-const JWT_SECRET = process.env.JWT_SECRET || "cambia_este_secreto_super_largo"; // 👈 cambia esto en producción
+const JWT_SECRET = process.env.JWT_SECRET || "cambia_este_secreto_super_largo"; 
 
 // --- DB ---
 const db = new Database("parking.db");
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS reservations (
 CREATE INDEX IF NOT EXISTS idx_res_spot_start_end
 ON reservations(spot, start_at, end_at);
 
--- 👇 Tabla de administradores
+--  Tabla de administradores
 CREATE TABLE IF NOT EXISTS admins (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,
@@ -39,19 +39,19 @@ CREATE TABLE IF NOT EXISTS admins (
 );
 `);
 
-// 👇 Crear admin por defecto si no hay ninguno
+//  Crear admin por defecto si no hay ninguno si necesitas crear más admins, lo puedes hacer editando el sqlite
 const rowAdmins = db.prepare("SELECT COUNT(1) as cnt FROM admins").get();
 if (rowAdmins.cnt === 0) {
-  const hash = bcrypt.hashSync("1234", 10); // clave: 1234
+  const hash = bcrypt.hashSync("1234", 10); 
   db.prepare(`
     INSERT INTO admins (username, password_hash)
     VALUES (?, ?)
   `).run("admin", hash);
 
-  console.log("Admin por defecto creado: admin / 1234");
+  console.log("RAUL borrar esta línea es solo para que pruebes admin / 1234");
 }
 
-// --- helpers ---
+
 function assertSpot(spot) {
   if (!Number.isInteger(spot) || spot < 1 || spot > TOTAL_SPOTS) {
     throw new Error(`Estacionamiento fuera de rango (1-${TOTAL_SPOTS}).`);
@@ -62,9 +62,9 @@ function assertInterval(startAt, endAt) {
   const start = new Date(startAt);
   const end = new Date(endAt);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    throw new Error("startAt/endAt inválidos. Usa ISO (ej: 2026-02-13T09:00:00-03:00)");
+    throw new Error("inicio/termino inválidos. Usa ISO (ej: 2026-02-13T09:00:00-03:00)");
   }
-  if (start >= end) throw new Error("startAt debe ser menor que endAt.");
+  if (start >= end) throw new Error("inicio debe ser menor que termino.");
 }
 
 function hasOverlap(spot, startAt, endAt, ignoreId = null) {
@@ -93,7 +93,7 @@ const CreateSchema = z.object({
   endAt: z.string().min(10),
 });
 
-// 👇 Middleware para verificar token de admin
+// 
 function authAdmin(req, res, next) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ")
@@ -116,7 +116,7 @@ function authAdmin(req, res, next) {
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 
-// 👇 Login de administrador
+// 
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
 
@@ -149,7 +149,7 @@ app.post("/login", (req, res) => {
   });
 });
 
-// Listar reservas (🔓 PÚBLICO, SIN LOGIN)
+// 
 app.get("/reservations", (req, res) => {
   const { from, to, spot } = req.query;
 
@@ -162,12 +162,12 @@ app.get("/reservations", (req, res) => {
     params.push(Number(spot));
   }
   if (from) {
-    // reservas que terminan después de "from"
+    
     where.push("end_at > ?");
     params.push(String(from));
   }
   if (to) {
-    // reservas que empiezan antes de "to"
+    
     where.push("start_at < ?");
     params.push(String(to));
   }
@@ -196,7 +196,7 @@ app.get("/availability", authAdmin, (req, res) => {
   }
 });
 
-// Crear reserva (🔐 SOLO ADMIN)
+// aca creamos las reservas recordar que solo puede el admin 
 app.post("/reservations", authAdmin, (req, res) => {
   try {
     const parsed = CreateSchema.parse(req.body);
@@ -225,7 +225,7 @@ app.post("/reservations", authAdmin, (req, res) => {
   }
 });
 
-// Cancelar reserva (🔐 SOLO ADMIN)
+// cancelar (borrar la reserva), por temas de tiempo evite poner el edit
 app.delete("/reservations/:id", authAdmin, (req, res) => {
   const id = Number(req.params.id);
   const info = db.prepare("DELETE FROM reservations WHERE id = ?").run(id);

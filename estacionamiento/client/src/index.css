@@ -3,9 +3,9 @@
   line-height: 1.5;
   font-weight: 400;
 
-  /* Si quieres modo claro por defecto, puedes quitar el color-scheme dark */
+  
   color-scheme: light;
-  background-color: #2d5063; /* fondo general */
+  background-color: #2d5063; /* fondo para el gral del sitio */
   color: #ffffff;
 
   font-synthesis: none;
@@ -23,7 +23,7 @@ a:hover {
   color: #535bf2;
 }
 
-/* 🔹 Importante: sacamos el display:flex del body para no forzar el centrado raro */
+
 body {
   margin: 0;
   min-width: 320px;
@@ -31,7 +31,7 @@ body {
   background-color: #2d5063;
 }
 
-/* Contenedor principal de la app */
+
 .app-container {
   max-width: 980px;
   margin: 24px auto;          /* centra horizontal */
@@ -39,13 +39,13 @@ body {
   color: #ffffff;
 }
 
-/* Centramos el título y le damos un poco de aire */
+
 .app-container h1 {
   text-align: center;
   margin-bottom: 16px;
 }
 
-/* 🔹 GRILLA RESPONSIVA */
+
 .layout-grid {
   display: grid;
   grid-template-columns: 1fr;     /* por defecto, 1 columna (móvil) */
@@ -53,7 +53,7 @@ body {
   align-items: flex-start;
 }
 
-/* A partir de cierto ancho, pasamos a 2 columnas */
+
 @media (min-width: 768px) {
   .layout-grid {
     grid-template-columns: 1fr 1fr;
@@ -84,7 +84,7 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
-/* Opcional: estilos específicos para modo claro si quieres mantenerlos */
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #ffffff;

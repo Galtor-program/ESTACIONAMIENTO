@@ -12,7 +12,7 @@ function formatDateTime(isoString) {
   if (!isoString) return "";
 
   const d = new Date(isoString);
-  if (Number.isNaN(d.getTime())) return isoString; // por si viene algo raro
+  if (Number.isNaN(d.getTime())) return isoString; 
 
   const pad = (n) => n.toString().padStart(2, "0");
 
@@ -27,7 +27,7 @@ function formatDateTime(isoString) {
 }
 
 export default function App() {
-  // 🔐 auth admin
+  
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [adminUser, setAdminUser] = useState(() => localStorage.getItem("adminUser") || "");
 
@@ -36,7 +36,7 @@ export default function App() {
 
   const isAdmin = !!token;
 
-  // estados de reserva
+ 
   const [name, setName] = useState("");
   const [spot, setSpot] = useState(1);
   const [plate, setPlate] = useState("");
@@ -52,7 +52,7 @@ export default function App() {
 
   const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
 
-  // 🔓 carga pública de reservas (sin token)
+
   async function loadReservations() {
     const res = await fetch(`${API}/reservations`);
     const data = await res.json();
@@ -63,7 +63,7 @@ export default function App() {
     loadReservations();
   }, []);
 
-  // Solo admin puede consultar disponibilidad (el backend lo requiere)
+ 
   async function checkAvailability() {
     setMsg("");
     if (!canCheck) return;
@@ -127,7 +127,7 @@ export default function App() {
         return;
       }
 
-      setMsg(`✅ Reserva creada (ID ${data.id})`);
+      setMsg(` Reserva creada (ID ${data.id})`);
       setName("");
       setPlate("");
       setPhone("");
@@ -153,12 +153,12 @@ export default function App() {
     });
     const data = await res.json();
     if (!res.ok) return setMsg(data?.error || "No se pudo cancelar");
-    setMsg("✅ Reserva cancelada");
+    setMsg(" Reserva cancelada");
     await loadReservations();
     await checkAvailability();
   }
 
-  // 🔐 Login admin
+  
   async function handleLogin(e) {
     e.preventDefault();
     setMsg("");
@@ -185,7 +185,7 @@ export default function App() {
       localStorage.setItem("token", data.token);
       localStorage.setItem("adminUser", data.username || "");
 
-      setMsg("✅ Sesión de administrador iniciada");
+      setMsg(" Sesión de administrador iniciada");
       setLoginPass("");
       setLoginUser("");
     } catch (err) {

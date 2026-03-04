@@ -1,0 +1,23 @@
+# Node
+**/node_modules/
+
+# Env files
+**/.env
+
+# Logs
+**/*.log
+
+# Builds
+**/dist/
+**/build/
+
+# SQLite / DB files
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*-wal
+**/*-shm
+
+# OS
+.DS_Store
+Thumbs.db

@@ -2,99 +2,147 @@ import express from "express";
 import cors from "cors";
 import Database from "better-sqlite3";
 import { z } from "zod";
-import bcrypt from "bcryptjs";        
-import jwt from "jsonwebtoken";       
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const TOTAL_SPOTS = 18;
-const JWT_SECRET = process.env.JWT_SECRET || "cambia_este_secreto_super_largo"; 
+const JWT_SECRET = process.env.JWT_SECRET || "cambia_este_secreto_super_largo";
+
+// me gusta más utilizar el 1 para el Lunes y el 0 lo dejamos para el domingo.
+const WEEKDAY_LABELS = {
+  0: "Domingo",
+  1: "Lunes",
+  2: "Martes",
+  3: "Miércoles",
+  4: "Jueves",
+  5: "Viernes",
+  6: "Sábado",
+};
 
 // --- DB ---
 const db = new Database("parking.db");
 db.pragma("journal_mode = WAL");
 
 db.exec(`
-CREATE TABLE IF NOT EXISTS reservations (
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('admin', 'user'))
+);
+
+CREATE TABLE IF NOT EXISTS weekly_reservations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   spot INTEGER NOT NULL,
   name TEXT NOT NULL,
   plate TEXT NOT NULL,
   phone TEXT NOT NULL,
-  start_at TEXT NOT NULL, -- ISO string
-  end_at TEXT NOT NULL,   -- ISO string
+  weekday INTEGER NOT NULL CHECK(weekday >= 0 AND weekday <= 6),
+  start_time TEXT NOT NULL,   -- HH:mm
+  end_time TEXT NOT NULL,     -- HH:mm
+  created_by_user_id INTEGER,
+  created_by_username TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_res_spot_start_end
-ON reservations(spot, start_at, end_at);
-
---  Tabla de administradores
-CREATE TABLE IF NOT EXISTS admins (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL
-);
+CREATE INDEX IF NOT EXISTS idx_weekly_reservations_main
+ON weekly_reservations(spot, weekday, start_time, end_time);
 `);
 
-//  Crear admin por defecto si no hay ninguno si necesitas crear más admins, lo puedes hacer editando el sqlite
-const rowAdmins = db.prepare("SELECT COUNT(1) as cnt FROM admins").get();
-if (rowAdmins.cnt === 0) {
-  const hash = bcrypt.hashSync("1234", 10); 
-  db.prepare(`
-    INSERT INTO admins (username, password_hash)
-    VALUES (?, ?)
-  `).run("admin", hash);
+// Usuarios iniciales
+const rowUsers = db.prepare("SELECT COUNT(1) as cnt FROM users").get();
 
-  console.log("RAUL borrar esta línea es solo para que pruebes admin / 1234");
+if (rowUsers.cnt === 0) {
+  const initialUsers = [
+    { username: "admin", password: "Admin2026*", role: "admin" },
+    { username: "usuario1", password: "Clave124*", role: "user" },
+    { username: "usuario2", password: "Clave155*", role: "user" },
+    { username: "usuario3", password: "Clave366*", role: "user" },
+    { username: "usuario4", password: "Clave475*", role: "user" },
+    { username: "usuario5", password: "Clave325*", role: "user" },
+    { username: "usuario6", password: "Clave825*", role: "user" },
+    { username: "usuario7", password: "Clave955*", role: "user" },
+  ];
+
+  const insertUser = db.prepare(`
+    INSERT INTO users (username, password_hash, role)
+    VALUES (?, ?, ?)
+  `);
+
+  for (const user of initialUsers) {
+    const hash = bcrypt.hashSync(user.password, 10);
+    insertUser.run(user.username, hash, user.role);
+  }
+
+  console.log("Raul anota los usuarios iniciales creados:");
+  console.log("admin / Admin2026*");
+  console.log("usuario1 / Clave124*");
+  console.log("usuario2 / Clave155*");
+  console.log("usuario3 / Clave366*");
+  console.log("usuario4 / Clave475*");
+  console.log("usuario5 / Clave325*");
+  console.log("usuario6 / Clave825*");
+  console.log("usuario7 / Clave955*");
 }
 
-
+// Estas funciones las dejo por si en algun momento lo sacas de local y alguien quiere modificar algo desde el front. 
 function assertSpot(spot) {
   if (!Number.isInteger(spot) || spot < 1 || spot > TOTAL_SPOTS) {
     throw new Error(`Estacionamiento fuera de rango (1-${TOTAL_SPOTS}).`);
   }
 }
 
-function assertInterval(startAt, endAt) {
-  const start = new Date(startAt);
-  const end = new Date(endAt);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    throw new Error("inicio/termino inválidos. Usa ISO (ej: 2026-02-13T09:00:00-03:00)");
+function assertWeekday(weekday) {
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+    throw new Error("Día inválido. Usa 0=Domingo ... 6=Sábado.");
   }
-  if (start >= end) throw new Error("inicio debe ser menor que termino.");
 }
 
-function hasOverlap(spot, startAt, endAt, ignoreId = null) {
+function isValidTimeHHMM(value) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
+}
+
+function timeToMinutes(value) {
+  const [hh, mm] = value.split(":").map(Number);
+  return hh * 60 + mm;
+}
+
+function assertTimeRange(startTime, endTime) {
+  if (!isValidTimeHHMM(startTime) || !isValidTimeHHMM(endTime)) {
+    throw new Error("Hora inválida. Usa formato HH:mm, por ejemplo 10:30.");
+  }
+
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = timeToMinutes(endTime);
+
+  if (startMinutes >= endMinutes) {
+    throw new Error("La hora de inicio debe ser menor que la hora de término.");
+  }
+}
+
+function hasWeeklyOverlap(spot, weekday, startTime, endTime, ignoreId = null) {
   const stmt = db.prepare(`
     SELECT COUNT(1) as cnt
-    FROM reservations
+    FROM weekly_reservations
     WHERE spot = ?
-      AND start_at < ?
-      AND ? < end_at
+      AND weekday = ?
+      AND start_time < ?
+      AND ? < end_time
       ${ignoreId ? "AND id != ?" : ""}
   `);
 
   const row = ignoreId
-    ? stmt.get(spot, endAt, startAt, ignoreId)
-    : stmt.get(spot, endAt, startAt);
+    ? stmt.get(spot, weekday, endTime, startTime, ignoreId)
+    : stmt.get(spot, weekday, endTime, startTime);
 
   return row.cnt > 0;
 }
 
-const CreateSchema = z.object({
-  spot: z.number().int().min(1).max(TOTAL_SPOTS),
-  name: z.string().min(1).max(120),
-  plate: z.string().min(1).max(120),
-  phone: z.string().min(1).max(20),
-  startAt: z.string().min(10),
-  endAt: z.string().min(10),
-});
-
-// 
-function authAdmin(req, res, next) {
+function authRequired(req, res, next) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ")
     ? authHeader.slice(7)
@@ -106,17 +154,32 @@ function authAdmin(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    // payload: { id, username }
-    req.admin = payload;
+    req.user = payload; // { id, username, role }
     next();
-  } catch (e) {
+  } catch {
     return res.status(401).json({ error: "Token inválido o expirado." });
   }
 }
 
+const CreateWeeklySchema = z.object({
+  spot: z.number().int().min(1).max(TOTAL_SPOTS),
+  name: z.string().min(1).max(120),
+  plate: z.string().min(1).max(120),
+  phone: z.string().min(1).max(20),
+  weekday: z.number().int().min(0).max(6),
+  startTime: z.string().min(5).max(5),
+  endTime: z.string().min(5).max(5),
+});
+
+// las rutas de la API, mantenemos todo en ingles para seguir un estandar, no me las doy de gringo
+
 app.get("/health", (_, res) => res.json({ ok: true }));
 
-// 
+app.get("/", (_, res) => {
+  res.send("API Estacionamientos OK ✅ Usa /health, /login, /weekly-reservations, /weekly-availability");
+});
+
+// Login
 app.post("/login", (req, res) => {
   const { username, password } = req.body || {};
 
@@ -124,118 +187,225 @@ app.post("/login", (req, res) => {
     return res.status(400).json({ error: "Faltan username o password." });
   }
 
-  const admin = db
-    .prepare("SELECT * FROM admins WHERE username = ?")
-    .get(username);
+  const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
 
-  if (!admin) {
+  if (!user) {
     return res.status(401).json({ error: "Usuario o clave inválidos." });
   }
 
-  const ok = bcrypt.compareSync(password, admin.password_hash);
+  const ok = bcrypt.compareSync(password, user.password_hash);
+
   if (!ok) {
     return res.status(401).json({ error: "Usuario o clave inválidos." });
   }
 
   const token = jwt.sign(
-    { id: admin.id, username: admin.username },
+    {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+    },
     JWT_SECRET,
     { expiresIn: "8h" }
   );
 
-  res.json({
+  return res.json({
     token,
-    username: admin.username,
+    id: user.id,
+    username: user.username,
+    role: user.role,
   });
 });
 
-// 
-app.get("/reservations", (req, res) => {
-  const { from, to, spot } = req.query;
+// Público: listar reservas semanales recuerda que no es necesario iniciar sesión esta información es publica
+app.get("/weekly-reservations", (req, res) => {
+  const { spot, weekday } = req.query;
 
-  let sql = "SELECT * FROM reservations";
+  let sql = `
+    SELECT
+      id,
+      spot,
+      name,
+      plate,
+      phone,
+      weekday,
+      start_time,
+      end_time,
+      created_by_user_id,
+      created_by_username,
+      created_at
+    FROM weekly_reservations
+  `;
+
   const params = [];
   const where = [];
 
-  if (spot) {
+  if (spot !== undefined && spot !== "") {
     where.push("spot = ?");
     params.push(Number(spot));
   }
-  if (from) {
-    
-    where.push("end_at > ?");
-    params.push(String(from));
-  }
-  if (to) {
-    
-    where.push("start_at < ?");
-    params.push(String(to));
+
+  if (weekday !== undefined && weekday !== "") {
+    where.push("weekday = ?");
+    params.push(Number(weekday));
   }
 
-  if (where.length) sql += " WHERE " + where.join(" AND ");
-  sql += " ORDER BY start_at ASC, spot ASC";
+  if (where.length) {
+    sql += " WHERE " + where.join(" AND ");
+  }
+  //aca hago el ordenamiento por el estacionamiento, el día y el horario de inicio para que sea más fácil de visualizar, primero se muestran los estacionamientos con sus respectivas reservas ordenadas por día y hora.
+
+  sql += " ORDER BY spot ASC, weekday ASC, start_time ASC";
 
   const rows = db.prepare(sql).all(...params);
-  res.json(rows);
+
+  const result = rows.map((r) => ({
+    ...r,
+    weekday_label: WEEKDAY_LABELS[r.weekday] ?? String(r.weekday),
+  }));
+
+  res.json(result);
 });
 
-// Ver disponibilidad (solo para admin, porque es parte del flujo de reserva)
-app.get("/availability", authAdmin, (req, res) => {
-  const { startAt, endAt } = req.query;
+// Público: ver disponibilidad semanal de un día/rango horario
+app.get("/weekly-availability", (req, res) => {
   try {
-    if (!startAt || !endAt) throw new Error("Faltan startAt y endAt.");
-    assertInterval(String(startAt), String(endAt));
+    const { weekday, startTime, endTime } = req.query;
+
+    if (weekday === undefined || !startTime || !endTime) {
+      throw new Error("Faltan weekday, startTime o endTime.");
+    }
+
+    const weekdayNumber = Number(weekday);
+
+    assertWeekday(weekdayNumber);
+    assertTimeRange(String(startTime), String(endTime));
 
     const available = [];
+
     for (let spot = 1; spot <= TOTAL_SPOTS; spot++) {
-      if (!hasOverlap(spot, String(startAt), String(endAt))) available.push(spot);
+      if (!hasWeeklyOverlap(spot, weekdayNumber, String(startTime), String(endTime))) {
+        available.push(spot);
+      }
     }
-    res.json({ total: TOTAL_SPOTS, available });
+
+    res.json({
+      weekday: weekdayNumber,
+      weekdayLabel: WEEKDAY_LABELS[weekdayNumber],
+      startTime: String(startTime),
+      endTime: String(endTime),
+      total: TOTAL_SPOTS,
+      available,
+    });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
 });
 
-// aca creamos las reservas recordar que solo puede el admin 
-app.post("/reservations", authAdmin, (req, res) => {
+// Crear reserva semanal
+app.post("/weekly-reservations", authRequired, (req, res) => {
   try {
-    const parsed = CreateSchema.parse(req.body);
-    const { spot, name, plate, phone, startAt, endAt } = parsed;
+    const parsed = CreateWeeklySchema.parse(req.body);
+    const { spot, name, plate, phone, weekday, startTime, endTime } = parsed;
 
     assertSpot(spot);
-    assertInterval(startAt, endAt);
+    assertWeekday(weekday);
+    assertTimeRange(startTime, endTime);
 
-    if (hasOverlap(spot, startAt, endAt)) {
-      return res.status(409).json({ error: "Choque de horario: spot no disponible en ese rango." });
+    if (hasWeeklyOverlap(spot, weekday, startTime, endTime)) {
+      return res.status(409).json({
+        error: "Choque de horario: ese estacionamiento ya está asignado en ese día y rango.",
+      });
     }
 
     const stmt = db.prepare(`
-      INSERT INTO reservations (spot, name, plate, phone, start_at, end_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO weekly_reservations (
+        spot,
+        name,
+        plate,
+        phone,
+        weekday,
+        start_time,
+        end_time,
+        created_by_user_id,
+        created_by_username
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const info = stmt.run(spot, name.trim(), plate.trim(), phone.trim(), startAt, endAt);
 
-    const created = db.prepare("SELECT * FROM reservations WHERE id = ?").get(info.lastInsertRowid);
-    res.status(201).json(created);
+    const info = stmt.run(
+      spot,
+      name.trim(),
+      plate.trim(),
+      phone.trim(),
+      weekday,
+      startTime,
+      endTime,
+      req.user.id,
+      req.user.username
+    );
+
+    const created = db
+      .prepare("SELECT * FROM weekly_reservations WHERE id = ?")
+      .get(info.lastInsertRowid);
+
+    return res.status(201).json({
+      ...created,
+      weekday_label: WEEKDAY_LABELS[created.weekday] ?? String(created.weekday),
+    });
   } catch (e) {
     if (e?.name === "ZodError") {
-      return res.status(400).json({ error: "Datos inválidos", details: e.errors });
+      return res.status(400).json({
+        error: "Datos inválidos",
+        details: e.errors,
+      });
     }
-    res.status(400).json({ error: e.message });
+
+    return res.status(400).json({ error: e.message });
   }
 });
 
-// cancelar (borrar la reserva), por temas de tiempo evite poner el edit
-app.delete("/reservations/:id", authAdmin, (req, res) => {
+// Borrar reserva semanal
+app.delete("/weekly-reservations/:id", authRequired, (req, res) => {
   const id = Number(req.params.id);
-  const info = db.prepare("DELETE FROM reservations WHERE id = ?").run(id);
-  if (info.changes === 0) return res.status(404).json({ error: "No existe esa reserva." });
-  res.json({ ok: true });
+
+  const reservation = db
+    .prepare("SELECT * FROM weekly_reservations WHERE id = ?")
+    .get(id);
+
+  if (!reservation) {
+    return res.status(404).json({ error: "No existe esa reserva." });
+  }
+
+  const isAdmin = req.user.role === "admin";
+  const isOwner = Number(reservation.created_by_user_id) === Number(req.user.id);
+
+  // Solo el admin o el usuario que creó la reserva pueden borrarla
+  if (!isAdmin && !isOwner) {
+    return res.status(403).json({
+      error: "No tienes permiso para borrar una reserva creada por otro usuario.",
+    });
+  }
+
+  const info = db.prepare("DELETE FROM weekly_reservations WHERE id = ?").run(id);
+
+  if (info.changes === 0) {
+    return res.status(404).json({ error: "No existe esa reserva." });
+  }
+
+  return res.json({ ok: true });
+});
+
+// Usuario actual
+app.get("/me", authRequired, (req, res) => {
+  res.json({
+    id: req.user.id,
+    username: req.user.username,
+    role: req.user.role,
+  });
 });
 
 const PORT = process.env.PORT || 4000;
-
-app.get("/", (_, res) => {
-  res.send("API Estacionamientos OK ✅ Usa /health, /login, /reservations, /availability");
+app.listen(PORT, () => {
+  console.log(`API en http://localhost:${PORT}`);
 });
-app.listen(PORT, () => console.log(`API en http://localhost:${PORT}`));

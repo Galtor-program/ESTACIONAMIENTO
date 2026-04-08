@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-console.log("API URL =>", API);
-
 const WEEKDAYS = [
   { value: 1, label: "Lunes" },
   { value: 2, label: "Martes" },
@@ -60,16 +58,15 @@ function groupReservationsByWeekday(rows) {
 }
 
 export default function App() {
-  const [token, setToken] = useState(() => localStorage.getItem("token") || "");
-  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("currentUser") || "");
-  const [currentRole, setCurrentRole] = useState(() => localStorage.getItem("currentRole") || "");
-  const [currentUserId, setCurrentUserId] = useState(() => localStorage.getItem("currentUserId") || "");
+  const [token, setToken] = useState("");
+  const [currentUser, setCurrentUser] = useState("");
+  const [currentRole, setCurrentRole] = useState("");
+  const [currentUserId, setCurrentUserId] = useState("");
 
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
 
-  const isLogged = !!token;
-  const isAdmin = currentRole === "admin";
+  const [assignedSpots, setAssignedSpots] = useState([]);
 
   const [name, setName] = useState("");
   const [spot, setSpot] = useState(1);
@@ -81,12 +78,38 @@ export default function App() {
 
   const [availability, setAvailability] = useState([]);
   const [reservations, setReservations] = useState([]);
+  const [teachers, setTeachers] = useState([]);
+  const [selectedTeacherId, setSelectedTeacherId] = useState("");
+  const [heads, setHeads] = useState([]);
   const [msg, setMsg] = useState("");
+
+  const [newTeacherName, setNewTeacherName] = useState("");
+  const [newTeacherPlate, setNewTeacherPlate] = useState("");
+  const [newTeacherPhone, setNewTeacherPhone] = useState("");
+
+  const [newHeadUsername, setNewHeadUsername] = useState("");
+  const [newHeadPassword, setNewHeadPassword] = useState("");
+  const [newHeadSpot1, setNewHeadSpot1] = useState(1);
+  const [newHeadSpot2, setNewHeadSpot2] = useState("");
+
+  const isLogged = !!token;
+  const isAdmin = currentRole === "admin";
+  const isHead = currentRole === "user";
 
   const canCheck = useMemo(() => weekday !== "" && startTime && endTime, [weekday, startTime, endTime]);
   const reservationsByDay = useMemo(() => groupReservationsByWeekday(reservations), [reservations]);
 
   const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+
+  const availableSpotsForForm = useMemo(() => {
+    if (isAdmin) {
+      return Array.from({ length: 18 }, (_, i) => i + 1);
+    }
+    if (isHead) {
+      return assignedSpots;
+    }
+    return Array.from({ length: 18 }, (_, i) => i + 1);
+  }, [isAdmin, isHead, assignedSpots]);
 
   async function loadReservations() {
     try {
@@ -105,9 +128,111 @@ export default function App() {
     }
   }
 
+  async function loadMe() {
+    if (!token) {
+      setAssignedSpots([]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API}/me`, { headers: { ...authHeaders } });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMsg(data?.error || "No se pudo cargar el usuario actual.");
+        return;
+      }
+
+      setAssignedSpots(Array.isArray(data.assignedSpots) ? data.assignedSpots : []);
+    } catch (e) {
+      console.error(e);
+      setMsg("No se pudo cargar la información del usuario.");
+    }
+  }
+
+  async function loadTeachers() {
+    if (!token) {
+      setTeachers([]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API}/teachers`, { headers: { ...authHeaders } });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMsg(data?.error || "No se pudieron cargar los docentes.");
+        return;
+      }
+
+      setTeachers(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+      setMsg("No se pudieron cargar los docentes.");
+    }
+  }
+
+  async function loadHeads() {
+    if (!token || !isAdmin) {
+      setHeads([]);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API}/heads`, { headers: { ...authHeaders } });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMsg(data?.error || "No se pudieron cargar los jefes.");
+        return;
+      }
+
+      setHeads(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+      setMsg("No se pudieron cargar los jefes.");
+    }
+  }
+
   useEffect(() => {
     loadReservations();
   }, []);
+
+  useEffect(() => {
+    if (token) {
+      loadMe();
+      loadTeachers();
+      if (currentRole === "admin") {
+        loadHeads();
+      }
+    } else {
+      setAssignedSpots([]);
+      setTeachers([]);
+      setHeads([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, currentRole]);
+
+  useEffect(() => {
+    if (isHead && assignedSpots.length > 0) {
+      setSpot(assignedSpots[0]);
+    }
+  }, [isHead, assignedSpots]);
+
+  function handleTeacherChange(teacherId) {
+    setSelectedTeacherId(teacherId);
+
+    if (!teacherId) {
+      return;
+    }
+
+    const teacher = teachers.find((t) => Number(t.id) === Number(teacherId));
+    if (!teacher) return;
+
+    setName(teacher.name || "");
+    setPlate(teacher.plate || "");
+    setPhone(teacher.phone || "");
+  }
 
   async function checkAvailability() {
     setMsg("");
@@ -142,11 +267,18 @@ export default function App() {
         return setMsg("Debes iniciar sesión para crear reservas.");
       }
 
-      if (!name.trim()) return setMsg("Escribe un nombre.");
-      if (!plate.trim()) return setMsg("Escribe una patente.");
-      if (!phone.trim()) return setMsg("Escribe un teléfono.");
+      if (isHead && assignedSpots.length === 0) {
+        return setMsg("Tu jefatura no tiene estacionamientos asignados.");
+      }
+
       if (weekday === "" || !startTime || !endTime) {
         return setMsg("Selecciona día, hora inicio y hora término.");
+      }
+
+      if (!selectedTeacherId) {
+        if (!name.trim()) return setMsg("Escribe un nombre.");
+        if (!plate.trim()) return setMsg("Escribe una patente.");
+        if (!phone.trim()) return setMsg("Escribe un teléfono.");
       }
 
       const body = {
@@ -158,6 +290,10 @@ export default function App() {
         startTime,
         endTime,
       };
+
+      if (selectedTeacherId) {
+        body.teacherId = Number(selectedTeacherId);
+      }
 
       const res = await fetch(`${API}/weekly-reservations`, {
         method: "POST",
@@ -184,6 +320,7 @@ export default function App() {
       setName("");
       setPlate("");
       setPhone("");
+      setSelectedTeacherId("");
       setStartTime("");
       setEndTime("");
       await loadReservations();
@@ -233,6 +370,137 @@ export default function App() {
     }
   }
 
+  async function createTeacher() {
+    setMsg("");
+
+    if (!isHead) {
+      return setMsg("Solo los jefes pueden crear docentes.");
+    }
+
+    if (!newTeacherName.trim()) return setMsg("Escribe el nombre del docente.");
+    if (!newTeacherPlate.trim()) return setMsg("Escribe la patente del docente.");
+    if (!newTeacherPhone.trim()) return setMsg("Escribe el teléfono del docente.");
+
+    try {
+      const res = await fetch(`${API}/teachers`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          name: newTeacherName,
+          plate: newTeacherPlate,
+          phone: newTeacherPhone,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMsg(data?.error || "No se pudo crear el docente.");
+        return;
+      }
+
+      setMsg("Docente creado correctamente.");
+      setNewTeacherName("");
+      setNewTeacherPlate("");
+      setNewTeacherPhone("");
+      await loadTeachers();
+    } catch (e) {
+      console.error(e);
+      setMsg("Error inesperado al crear docente.");
+    }
+  }
+
+  async function deleteTeacher(id) {
+    setMsg("");
+
+    if (!isHead && !isAdmin) {
+      return setMsg("No tienes permisos para borrar docentes.");
+    }
+
+    try {
+      const res = await fetch(`${API}/teachers/${id}`, {
+        method: "DELETE",
+        headers: {
+          ...authHeaders,
+        },
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMsg(data?.error || "No se pudo borrar el docente.");
+        return;
+      }
+
+      if (Number(selectedTeacherId) === Number(id)) {
+        setSelectedTeacherId("");
+        setName("");
+        setPlate("");
+        setPhone("");
+      }
+
+      setMsg("Docente eliminado correctamente.");
+      await loadTeachers();
+    } catch (e) {
+      console.error(e);
+      setMsg("Error inesperado al borrar docente.");
+    }
+  }
+
+  async function createHead() {
+    setMsg("");
+
+    if (!isAdmin) {
+      return setMsg("Solo el admin puede crear jefes.");
+    }
+
+    if (!newHeadUsername.trim()) return setMsg("Escribe el username del jefe.");
+    if (!newHeadPassword.trim()) return setMsg("Escribe la contraseña del jefe.");
+
+    const spots = [newHeadSpot1, newHeadSpot2]
+      .filter((s) => s !== "" && s !== null && s !== undefined)
+      .map(Number);
+
+    if (spots.length < 1 || spots.length > 2) {
+      return setMsg("Debes asignar 1 o 2 estacionamientos.");
+    }
+
+    try {
+      const res = await fetch(`${API}/heads`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          username: newHeadUsername,
+          password: newHeadPassword,
+          spots,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMsg(data?.error || "No se pudo crear el jefe.");
+        return;
+      }
+
+      setMsg(`Jefe creado: ${data.username}`);
+      setNewHeadUsername("");
+      setNewHeadPassword("");
+      setNewHeadSpot1(1);
+      setNewHeadSpot2("");
+      await loadHeads();
+    } catch (e) {
+      console.error(e);
+      setMsg("Error inesperado al crear jefe.");
+    }
+  }
+
   async function handleLogin(e) {
     e.preventDefault();
     setMsg("");
@@ -278,6 +546,9 @@ export default function App() {
     setCurrentUser("");
     setCurrentRole("");
     setCurrentUserId("");
+    setAssignedSpots([]);
+    setTeachers([]);
+    setHeads([]);
 
     localStorage.removeItem("token");
     localStorage.removeItem("currentUser");
@@ -295,20 +566,24 @@ export default function App() {
 
   return (
     <div
-      className="app-container"
       style={{
         width: "100%",
         maxWidth: "100%",
         margin: 0,
         padding: "16px 24px",
         boxSizing: "border-box",
+        minHeight: "100vh",
+        backgroundImage: 'url("/fondo4.png")',
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
         <img
           src="/logocft.png"
           alt="Logo"
-          style={{ width: 220, marginBottom: 4, alignSelf: "center" }}
+          style={{ width: 280, marginBottom: 4, alignSelf: "center" }}
         />
 
         <h1 style={{ textAlign: "center", marginBottom: 8 }}>
@@ -317,7 +592,7 @@ export default function App() {
 
         <div
           style={{
-            maxWidth: 320,
+            maxWidth: 360,
             margin: "0 auto",
             padding: 12,
             borderRadius: 12,
@@ -331,8 +606,14 @@ export default function App() {
                 <strong>Usuario:</strong> {currentUser}
               </div>
               <div>
-                <strong>Rol:</strong> {currentRole}
+                <strong>Rol:</strong> {isAdmin ? "admin" : "jefe de carrera"}
               </div>
+              {isHead && (
+                <div>
+                  <strong>Estacionamientos asignados:</strong>{" "}
+                  {assignedSpots.length ? assignedSpots.join(", ") : "Sin asignar"}
+                </div>
+              )}
               <button onClick={handleLogout}>Cerrar sesión</button>
             </div>
           ) : (
@@ -371,120 +652,277 @@ export default function App() {
         className="layout-grid"
         style={{
           display: "grid",
-          gridTemplateColumns: "380px 1fr",
+          gridTemplateColumns: "420px 1fr",
           gap: 16,
           alignItems: "start",
           width: "100%",
         }}
       >
-        <div style={{ border: "5px solid #FFCE00", borderRadius: 12, padding: 16 }}>
-          <h2>{isLogged ? "Crear asignación semanal" : "Consulta de disponibilidad semanal"}</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ border: "5px solid #FFCE00", borderRadius: 12, padding: 16 }}>
+            <h2>{isLogged ? "Crear asignación semanal" : "Consulta de disponibilidad semanal"}</h2>
 
-          <label>Nombre</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Ej: Felipe"
-            style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
-            disabled={!isLogged}
-          />
+            {isHead && (
+              <>
+                <label>Docente guardado</label>
+                <select
+                  value={selectedTeacherId}
+                  onChange={(e) => handleTeacherChange(e.target.value)}
+                  style={{ width: "95%", padding: 10, margin: "6px 0 12px" }}
+                >
+                  <option value="">-- Cargar manual o elegir docente --</option>
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} | {t.plate}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
 
-          <label>Patente</label>
-          <input
-            value={plate}
-            onChange={(e) => setPlate(e.target.value)}
-            placeholder="Ej: ABC123"
-            style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
-            disabled={!isLogged}
-          />
+            <label>Nombre</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ej: María Pérez"
+              style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              disabled={!isLogged}
+            />
 
-          <label>Teléfono</label>
-          <input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="Ej: 912345678"
-            style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
-            disabled={!isLogged}
-          />
+            <label>Patente</label>
+            <input
+              value={plate}
+              onChange={(e) => setPlate(e.target.value)}
+              placeholder="Ej: BBCC44"
+              style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              disabled={!isLogged}
+            />
 
-          <label>Estacionamiento (1-18)</label>
-          <select
-            value={spot}
-            onChange={(e) => setSpot(e.target.value)}
-            style={{ width: "95%", padding: 10, margin: "6px 0 12px" }}
-            disabled={!isLogged}
-          >
-            {Array.from({ length: 18 }, (_, i) => i + 1).map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            <label>Teléfono</label>
+            <input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="Ej: 912345678"
+              style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              disabled={!isLogged}
+            />
 
-          <label>Día de la semana</label>
-          <select
-            value={weekday}
-            onChange={(e) => setWeekday(e.target.value)}
-            style={{ width: "95%", padding: 10, margin: "6px 0 12px" }}
-          >
-            {WEEKDAYS.map((d) => (
-              <option key={d.value} value={d.value}>
-                {d.label}
-              </option>
-            ))}
-          </select>
+            <label>Estacionamiento</label>
+            <select
+              value={spot}
+              onChange={(e) => setSpot(Number(e.target.value))}
+              style={{ width: "95%", padding: 10, margin: "6px 0 12px" }}
+              disabled={!isLogged}
+            >
+              {availableSpotsForForm.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
 
-          <label>Hora inicio</label>
-          <input
-            type="time"
-            value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
-            style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
-          />
+            <label>Día de la semana</label>
+            <select
+              value={weekday}
+              onChange={(e) => setWeekday(Number(e.target.value))}
+              style={{ width: "95%", padding: 10, margin: "6px 0 12px" }}
+            >
+              {WEEKDAYS.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
 
-          <label>Hora término</label>
-          <input
-            type="time"
-            value={endTime}
-            onChange={(e) => setEndTime(e.target.value)}
-            style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
-          />
+            <label>Hora inicio</label>
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+            />
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={checkAvailability} disabled={!canCheck} style={{ padding: "10px 12px" }}>
-              Ver disponibilidad
-            </button>
+            <label>Hora término</label>
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+            />
 
-            {isLogged && (
-              <button onClick={createReservation} style={{ padding: "10px 12px" }}>
-                Reservar
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={checkAvailability} disabled={!canCheck} style={{ padding: "10px 12px" }}>
+                Ver disponibilidad
               </button>
-            )}
+
+              {isLogged && (
+                <button onClick={createReservation} style={{ padding: "10px 12px" }}>
+                  Reservar
+                </button>
+              )}
+            </div>
+
+            <div style={{ marginTop: 16 }}>
+              <h3>Disponibles en ese rango</h3>
+              {availability.length ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {availability.map((s) => (
+                    <span
+                      key={s}
+                      style={{ border: "1px solid #FFCE00", borderRadius: 999, padding: "4px 10px" }}
+                    >
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ color: "#11f368" }}>Consulta un día y un rango horario para ver disponibles.</p>
+              )}
+            </div>
           </div>
 
-          <div style={{ marginTop: 16 }}>
-            <h3>Disponibles en ese rango</h3>
-            {availability.length ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {availability.map((s) => (
-                  <span
-                    key={s}
-                    style={{ border: "1px solid #FFCE00", borderRadius: 999, padding: "4px 10px" }}
-                  >
-                    {s}
-                  </span>
-                ))}
+          {isHead && (
+            <div style={{ border: "5px solid #0082CA", borderRadius: 12, padding: 16 }}>
+              <h2>Docentes</h2>
+
+              <label>Nombre</label>
+              <input
+                value={newTeacherName}
+                onChange={(e) => setNewTeacherName(e.target.value)}
+                style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              />
+
+              <label>Patente</label>
+              <input
+                value={newTeacherPlate}
+                onChange={(e) => setNewTeacherPlate(e.target.value)}
+                style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              />
+
+              <label>Teléfono</label>
+              <input
+                value={newTeacherPhone}
+                onChange={(e) => setNewTeacherPhone(e.target.value)}
+                style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              />
+
+              <button onClick={createTeacher} style={{ padding: "10px 12px", marginBottom: 14 }}>
+                Guardar docente
+              </button>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {teachers.length === 0 ? (
+                  <p>No hay docentes cargados.</p>
+                ) : (
+                  teachers.map((t) => (
+                    <div
+                      key={t.id}
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.2)",
+                        borderRadius: 10,
+                        padding: 10,
+                        background: "rgba(255,255,255,0.03)",
+                      }}
+                    >
+                      <div>
+                        <strong>{t.name}</strong>
+                      </div>
+                      <div>Patente: {t.plate}</div>
+                      <div>Teléfono: {t.phone}</div>
+
+                      <div style={{ marginTop: 10 }}>
+                        <button onClick={() => deleteTeacher(t.id)} style={{ padding: "6px 10px" }}>
+                          Borrar docente
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-            ) : (
-              <p style={{ color: "#11f368" }}>Consulta un día y un rango horario para ver disponibles.</p>
-            )}
-          </div>
+            </div>
+          )}
+
+          {isAdmin && (
+            <div style={{ border: "5px solid #D0009E", borderRadius: 12, padding: 16 }}>
+              <h2>Crear jefe de carrera</h2>
+
+              <label>Username</label>
+              <input
+                value={newHeadUsername}
+                onChange={(e) => setNewHeadUsername(e.target.value)}
+                style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              />
+
+              <label>Contraseña</label>
+              <input
+                type="password"
+                value={newHeadPassword}
+                onChange={(e) => setNewHeadPassword(e.target.value)}
+                style={{ width: "85%", padding: 10, margin: "6px 0 12px" }}
+              />
+
+              <label>Estacionamiento 1</label>
+              <select
+                value={newHeadSpot1}
+                onChange={(e) => setNewHeadSpot1(Number(e.target.value))}
+                style={{ width: "95%", padding: 10, margin: "6px 0 12px" }}
+              >
+                {Array.from({ length: 18 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+
+              <label>Estacionamiento 2 (opcional)</label>
+              <select
+                value={newHeadSpot2}
+                onChange={(e) => setNewHeadSpot2(e.target.value === "" ? "" : Number(e.target.value))}
+                style={{ width: "95%", padding: 10, margin: "6px 0 12px" }}
+              >
+                <option value="">-</option>
+                {Array.from({ length: 18 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+
+              <button onClick={createHead} style={{ padding: "10px 12px", marginBottom: 16 }}>
+                Crear jefe
+              </button>
+
+              <h3>Jefes actuales</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {heads.length === 0 ? (
+                  <p>No hay jefes cargados.</p>
+                ) : (
+                  heads.map((h) => (
+                    <div
+                      key={h.id}
+                      style={{
+                        border: "1px solid rgba(255,255,255,0.2)",
+                        borderRadius: 10,
+                        padding: 10,
+                        background: "rgba(255,255,255,0.03)",
+                      }}
+                    >
+                      <div>
+                        <strong>{h.username}</strong>
+                      </div>
+                      <div>Spots: {(h.assignedSpots || []).join(", ") || "Sin asignar"}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div
           style={{
             width: "100%",
-            border: "5px solid #1f1580",
+            border: "5px solid #0082CA",
             borderRadius: 12,
             padding: 16,
             boxSizing: "border-box",
@@ -514,7 +952,7 @@ export default function App() {
                   <div
                     key={day.value}
                     style={{
-                      background: "rgba(255,255,255,0.04)",
+                      background: "rgba(75, 69, 69, 0.03)",
                       border: "1px solid rgba(255,255,255,0.15)",
                       borderRadius: 12,
                       padding: 12,
@@ -543,7 +981,7 @@ export default function App() {
                               border: "1px solid #FFCE00",
                               borderRadius: 10,
                               padding: 10,
-                              background: "rgba(255, 206, 0, 0.08)",
+                              background: "rgba(150, 130, 52, 0.48)",
                               boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
                             }}
                           >

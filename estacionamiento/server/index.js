@@ -12,7 +12,6 @@ app.use(express.json());
 const TOTAL_SPOTS = 18;
 const JWT_SECRET = process.env.JWT_SECRET || "cambia_este_secreto_super_largo";
 
-// me gusta más utilizar el 1 para el Lunes y el 0 lo dejamos para el domingo.
 const WEEKDAY_LABELS = {
   0: "Domingo",
   1: "Lunes",
@@ -23,7 +22,6 @@ const WEEKDAY_LABELS = {
   6: "Sábado",
 };
 
-// --- DB ---
 const db = new Database("parking.db");
 db.pragma("journal_mode = WAL");
 
@@ -42,8 +40,8 @@ CREATE TABLE IF NOT EXISTS weekly_reservations (
   plate TEXT NOT NULL,
   phone TEXT NOT NULL,
   weekday INTEGER NOT NULL CHECK(weekday >= 0 AND weekday <= 6),
-  start_time TEXT NOT NULL,   -- HH:mm
-  end_time TEXT NOT NULL,     -- HH:mm
+  start_time TEXT NOT NULL,
+  end_time TEXT NOT NULL,
   created_by_user_id INTEGER,
   created_by_username TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -51,21 +49,44 @@ CREATE TABLE IF NOT EXISTS weekly_reservations (
 
 CREATE INDEX IF NOT EXISTS idx_weekly_reservations_main
 ON weekly_reservations(spot, weekday, start_time, end_time);
+
+CREATE TABLE IF NOT EXISTS head_spots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  spot INTEGER NOT NULL CHECK(spot >= 1 AND spot <= 18),
+  UNIQUE(user_id, spot),
+  UNIQUE(spot),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_head_spots_user
+ON head_spots(user_id);
+
+CREATE TABLE IF NOT EXISTS teachers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  plate TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teachers_user
+ON teachers(user_id);
 `);
 
-// Usuarios iniciales
 const rowUsers = db.prepare("SELECT COUNT(1) as cnt FROM users").get();
 
 if (rowUsers.cnt === 0) {
   const initialUsers = [
+    // administadores
     { username: "admin", password: "Admin2026*", role: "admin" },
+    
+    //jefes de carrera
     { username: "usuario1", password: "Clave124*", role: "user" },
-    { username: "usuario2", password: "Clave155*", role: "user" },
-    { username: "usuario3", password: "Clave366*", role: "user" },
-    { username: "usuario4", password: "Clave475*", role: "user" },
-    { username: "usuario5", password: "Clave325*", role: "user" },
-    { username: "usuario6", password: "Clave825*", role: "user" },
-    { username: "usuario7", password: "Clave955*", role: "user" },
+  
   ];
 
   const insertUser = db.prepare(`
@@ -78,18 +99,11 @@ if (rowUsers.cnt === 0) {
     insertUser.run(user.username, hash, user.role);
   }
 
-  console.log("Raul anota los usuarios iniciales creados:");
+  console.log("Usuarios iniciales creados:");
   console.log("admin / Admin2026*");
-  console.log("usuario1 / Clave124*");
-  console.log("usuario2 / Clave155*");
-  console.log("usuario3 / Clave366*");
-  console.log("usuario4 / Clave475*");
-  console.log("usuario5 / Clave325*");
-  console.log("usuario6 / Clave825*");
-  console.log("usuario7 / Clave955*");
 }
 
-// Estas funciones las dejo por si en algun momento lo sacas de local y alguien quiere modificar algo desde el front. 
+// ---------- Helpers ----------
 function assertSpot(spot) {
   if (!Number.isInteger(spot) || spot < 1 || spot > TOTAL_SPOTS) {
     throw new Error(`Estacionamiento fuera de rango (1-${TOTAL_SPOTS}).`);
@@ -113,7 +127,7 @@ function timeToMinutes(value) {
 
 function assertTimeRange(startTime, endTime) {
   if (!isValidTimeHHMM(startTime) || !isValidTimeHHMM(endTime)) {
-    throw new Error("Hora inválida. Usa formato HH:mm, por ejemplo 10:30.");
+    throw new Error("Hora inválida. Usa formato HH:mm.");
   }
 
   const startMinutes = timeToMinutes(startTime);
@@ -124,7 +138,7 @@ function assertTimeRange(startTime, endTime) {
   }
 }
 
-function hasWeeklyOverlap(spot, weekday, startTime, endTime, ignoreId = null) {
+function hasWeeklyOverlap(spot, weekday, startTime, endTime) {
   const stmt = db.prepare(`
     SELECT COUNT(1) as cnt
     FROM weekly_reservations
@@ -132,21 +146,15 @@ function hasWeeklyOverlap(spot, weekday, startTime, endTime, ignoreId = null) {
       AND weekday = ?
       AND start_time < ?
       AND ? < end_time
-      ${ignoreId ? "AND id != ?" : ""}
   `);
 
-  const row = ignoreId
-    ? stmt.get(spot, weekday, endTime, startTime, ignoreId)
-    : stmt.get(spot, weekday, endTime, startTime);
-
+  const row = stmt.get(spot, weekday, endTime, startTime);
   return row.cnt > 0;
 }
 
 function authRequired(req, res, next) {
   const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : null;
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
   if (!token) {
     return res.status(401).json({ error: "No autenticado." });
@@ -154,29 +162,65 @@ function authRequired(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload; // { id, username, role }
+    req.user = payload;
     next();
   } catch {
     return res.status(401).json({ error: "Token inválido o expirado." });
   }
 }
 
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== "admin") {
+    return res.status(403).json({ error: "Solo el administrador puede realizar esta acción." });
+  }
+  next();
+}
+
+function getAssignedSpots(userId) {
+  const rows = db
+    .prepare("SELECT spot FROM head_spots WHERE user_id = ? ORDER BY spot ASC")
+    .all(userId);
+
+  return rows.map((r) => Number(r.spot));
+}
+
+function isSpotAssignedToUser(userId, spot) {
+  const row = db
+    .prepare("SELECT 1 FROM head_spots WHERE user_id = ? AND spot = ?")
+    .get(userId, spot);
+
+  return !!row;
+}
+
+// ---------- Schemas ----------
 const CreateWeeklySchema = z.object({
   spot: z.number().int().min(1).max(TOTAL_SPOTS),
-  name: z.string().min(1).max(120),
-  plate: z.string().min(1).max(120),
-  phone: z.string().min(1).max(20),
+  name: z.string().trim().max(120).optional(),
+  plate: z.string().trim().max(120).optional(),
+  phone: z.string().trim().max(20).optional(),
   weekday: z.number().int().min(0).max(6),
   startTime: z.string().min(5).max(5),
   endTime: z.string().min(5).max(5),
+  teacherId: z.number().int().positive().optional(),
 });
 
-// las rutas de la API, mantenemos todo en ingles para seguir un estandar, no me las doy de gringo
+const CreateHeadSchema = z.object({
+  username: z.string().trim().min(3).max(50),
+  password: z.string().min(6).max(100),
+  spots: z.array(z.number().int().min(1).max(TOTAL_SPOTS)).min(1).max(2),
+});
 
+const CreateTeacherSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  plate: z.string().trim().min(1).max(120),
+  phone: z.string().trim().min(1).max(20),
+});
+
+// ---------- API ----------
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 app.get("/", (_, res) => {
-  res.send("API Estacionamientos OK ✅ Usa /health, /login, /weekly-reservations, /weekly-availability");
+  res.send("API Estacionamientos OK");
 });
 
 // Login
@@ -217,7 +261,210 @@ app.post("/login", (req, res) => {
   });
 });
 
-// Público: listar reservas semanales recuerda que no es necesario iniciar sesión esta información es publica
+// Usuario actual
+app.get("/me", authRequired, (req, res) => {
+  const assignedSpots =
+    req.user.role === "user"
+      ? getAssignedSpots(req.user.id)
+      : Array.from({ length: TOTAL_SPOTS }, (_, i) => i + 1);
+
+  res.json({
+    id: req.user.id,
+    username: req.user.username,
+    role: req.user.role,
+    assignedSpots,
+  });
+});
+
+// ---------- Jefes ----------
+app.get("/heads", authRequired, requireAdmin, (req, res) => {
+  const users = db
+    .prepare(`
+      SELECT id, username, role
+      FROM users
+      WHERE role = 'user'
+      ORDER BY username ASC
+    `)
+    .all();
+
+  const result = users.map((u) => ({
+    ...u,
+    assignedSpots: getAssignedSpots(u.id),
+  }));
+
+  res.json(result);
+});
+
+app.post("/heads", authRequired, requireAdmin, (req, res) => {
+  try {
+    const parsed = CreateHeadSchema.parse(req.body);
+    const { username, password, spots } = parsed;
+
+    const uniqueSpots = [...new Set(spots)];
+
+    if (uniqueSpots.length < 1 || uniqueSpots.length > 2) {
+      return res.status(400).json({ error: "Debes asignar 1 o 2 estacionamientos distintos." });
+    }
+
+    const existingUser = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
+    if (existingUser) {
+      return res.status(409).json({ error: "Ese username ya existe." });
+    }
+
+    for (const spot of uniqueSpots) {
+      const spotTaken = db.prepare("SELECT user_id FROM head_spots WHERE spot = ?").get(spot);
+      if (spotTaken) {
+        return res.status(409).json({ error: `El estacionamiento ${spot} ya está asignado a otro jefe.` });
+      }
+    }
+
+    const passwordHash = bcrypt.hashSync(password, 10);
+
+    const tx = db.transaction(() => {
+      const userInfo = db
+        .prepare(`
+          INSERT INTO users (username, password_hash, role)
+          VALUES (?, ?, 'user')
+        `)
+        .run(username, passwordHash);
+
+      const newUserId = Number(userInfo.lastInsertRowid);
+
+      const insertSpot = db.prepare(`
+        INSERT INTO head_spots (user_id, spot)
+        VALUES (?, ?)
+      `);
+
+      for (const spot of uniqueSpots) {
+        insertSpot.run(newUserId, spot);
+      }
+
+      return newUserId;
+    });
+
+    const newUserId = tx();
+
+    const created = db
+      .prepare(`
+        SELECT id, username, role
+        FROM users
+        WHERE id = ?
+      `)
+      .get(newUserId);
+
+    return res.status(201).json({
+      ...created,
+      assignedSpots: getAssignedSpots(newUserId),
+    });
+  } catch (e) {
+    if (e?.name === "ZodError") {
+      return res.status(400).json({ error: "Datos inválidos", details: e.errors });
+    }
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+// ---------- Docentes ----------
+app.get("/teachers", authRequired, (req, res) => {
+  let rows = [];
+
+  if (req.user.role === "admin") {
+    rows = db
+      .prepare(`
+        SELECT
+          t.id,
+          t.user_id,
+          u.username as owner_username,
+          t.name,
+          t.plate,
+          t.phone,
+          t.active,
+          t.created_at
+        FROM teachers t
+        JOIN users u ON u.id = t.user_id
+        ORDER BY u.username ASC, t.name ASC
+      `)
+      .all();
+  } else {
+    rows = db
+      .prepare(`
+        SELECT
+          id,
+          user_id,
+          name,
+          plate,
+          phone,
+          active,
+          created_at
+        FROM teachers
+        WHERE user_id = ?
+        ORDER BY name ASC
+      `)
+      .all(req.user.id);
+  }
+
+  res.json(rows);
+});
+
+app.post("/teachers", authRequired, (req, res) => {
+  try {
+    if (req.user.role !== "user") {
+      return res.status(403).json({ error: "Solo los jefes pueden crear docentes." });
+    }
+
+    const parsed = CreateTeacherSchema.parse(req.body);
+
+    const info = db
+      .prepare(`
+        INSERT INTO teachers (user_id, name, plate, phone, active)
+        VALUES (?, ?, ?, ?, 1)
+      `)
+      .run(req.user.id, parsed.name, parsed.plate, parsed.phone);
+
+    const created = db
+      .prepare(`
+        SELECT id, user_id, name, plate, phone, active, created_at
+        FROM teachers
+        WHERE id = ?
+      `)
+      .get(info.lastInsertRowid);
+
+    return res.status(201).json(created);
+  } catch (e) {
+    if (e?.name === "ZodError") {
+      return res.status(400).json({ error: "Datos inválidos", details: e.errors });
+    }
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/teachers/:id", authRequired, (req, res) => {
+  const teacherId = Number(req.params.id);
+
+  const teacher = db
+    .prepare(`
+      SELECT id, user_id
+      FROM teachers
+      WHERE id = ?
+    `)
+    .get(teacherId);
+
+  if (!teacher) {
+    return res.status(404).json({ error: "No existe ese docente." });
+  }
+
+  const isAdmin = req.user.role === "admin";
+  const isOwner = Number(teacher.user_id) === Number(req.user.id);
+
+  if (!isAdmin && !isOwner) {
+    return res.status(403).json({ error: "No tienes permiso para borrar este docente." });
+  }
+
+  db.prepare("DELETE FROM teachers WHERE id = ?").run(teacherId);
+  return res.json({ ok: true });
+});
+
+// ---------- Público ----------
 app.get("/weekly-reservations", (req, res) => {
   const { spot, weekday } = req.query;
 
@@ -253,7 +500,6 @@ app.get("/weekly-reservations", (req, res) => {
   if (where.length) {
     sql += " WHERE " + where.join(" AND ");
   }
-  //aca hago el ordenamiento por el estacionamiento, el día y el horario de inicio para que sea más fácil de visualizar, primero se muestran los estacionamientos con sus respectivas reservas ordenadas por día y hora.
 
   sql += " ORDER BY spot ASC, weekday ASC, start_time ASC";
 
@@ -267,7 +513,6 @@ app.get("/weekly-reservations", (req, res) => {
   res.json(result);
 });
 
-// Público: ver disponibilidad semanal de un día/rango horario
 app.get("/weekly-availability", (req, res) => {
   try {
     const { weekday, startTime, endTime } = req.query;
@@ -302,15 +547,51 @@ app.get("/weekly-availability", (req, res) => {
   }
 });
 
-// Crear reserva semanal
+// ---------- Reservas ----------
 app.post("/weekly-reservations", authRequired, (req, res) => {
   try {
     const parsed = CreateWeeklySchema.parse(req.body);
-    const { spot, name, plate, phone, weekday, startTime, endTime } = parsed;
+    let { spot, name, plate, phone, weekday, startTime, endTime, teacherId } = parsed;
 
     assertSpot(spot);
     assertWeekday(weekday);
     assertTimeRange(startTime, endTime);
+
+    if (req.user.role === "user" && !isSpotAssignedToUser(req.user.id, spot)) {
+      return res.status(403).json({
+        error: "Solo puedes reservar en los estacionamientos asignados a tu jefatura.",
+      });
+    }
+
+    if (teacherId) {
+      const teacher = db
+        .prepare(`
+          SELECT id, user_id, name, plate, phone, active
+          FROM teachers
+          WHERE id = ?
+        `)
+        .get(teacherId);
+
+      if (!teacher) {
+        return res.status(404).json({ error: "No existe el docente seleccionado." });
+      }
+
+      if (req.user.role === "user" && Number(teacher.user_id) !== Number(req.user.id)) {
+        return res.status(403).json({ error: "Ese docente no pertenece a tu jefatura." });
+      }
+
+      if (Number(teacher.active) !== 1) {
+        return res.status(400).json({ error: "Ese docente está inactivo." });
+      }
+
+      name = teacher.name;
+      plate = teacher.plate;
+      phone = teacher.phone;
+    }
+
+    if (!String(name || "").trim()) return res.status(400).json({ error: "Escribe un nombre." });
+    if (!String(plate || "").trim()) return res.status(400).json({ error: "Escribe una patente." });
+    if (!String(phone || "").trim()) return res.status(400).json({ error: "Escribe un teléfono." });
 
     if (hasWeeklyOverlap(spot, weekday, startTime, endTime)) {
       return res.status(409).json({
@@ -335,9 +616,9 @@ app.post("/weekly-reservations", authRequired, (req, res) => {
 
     const info = stmt.run(
       spot,
-      name.trim(),
-      plate.trim(),
-      phone.trim(),
+      String(name).trim(),
+      String(plate).trim(),
+      String(phone).trim(),
       weekday,
       startTime,
       endTime,
@@ -365,7 +646,6 @@ app.post("/weekly-reservations", authRequired, (req, res) => {
   }
 });
 
-// Borrar reserva semanal
 app.delete("/weekly-reservations/:id", authRequired, (req, res) => {
   const id = Number(req.params.id);
 
@@ -380,29 +660,14 @@ app.delete("/weekly-reservations/:id", authRequired, (req, res) => {
   const isAdmin = req.user.role === "admin";
   const isOwner = Number(reservation.created_by_user_id) === Number(req.user.id);
 
-  // Solo el admin o el usuario que creó la reserva pueden borrarla
   if (!isAdmin && !isOwner) {
     return res.status(403).json({
       error: "No tienes permiso para borrar una reserva creada por otro usuario.",
     });
   }
 
-  const info = db.prepare("DELETE FROM weekly_reservations WHERE id = ?").run(id);
-
-  if (info.changes === 0) {
-    return res.status(404).json({ error: "No existe esa reserva." });
-  }
-
+  db.prepare("DELETE FROM weekly_reservations WHERE id = ?").run(id);
   return res.json({ ok: true });
-});
-
-// Usuario actual
-app.get("/me", authRequired, (req, res) => {
-  res.json({
-    id: req.user.id,
-    username: req.user.username,
-    role: req.user.role,
-  });
 });
 
 const PORT = process.env.PORT || 4000;

@@ -81,8 +81,11 @@ const rowUsers = db.prepare("SELECT COUNT(1) as cnt FROM users").get();
 
 if (rowUsers.cnt === 0) {
   const initialUsers = [
-    // administadores
-    { username: "admin", password: "Admin2026*", role: "admin" },
+        // administadores
+    { username: "Global", password: "Admin2026*", role: "admin" },
+    { username: "marcelabastias", password: "marcela.2026*", role: "admin" },
+    { username: "daphnehernandez", password: "daphne.2026$", role: "admin" },
+    { username: "jaimeguajardo", password: "jaime.2026_", role: "admin" }
     
    
   
@@ -100,6 +103,9 @@ if (rowUsers.cnt === 0) {
 
   console.log("Usuarios iniciales creados:");
   console.log("admin / Admin2026*");
+  console.log("marcelabastias / marcela.2026*");
+  console.log("daphnehernandez / daphne.2026$");
+  console.log("jaimeguajardo / jaime.2026_");
 
 }
 

@@ -84,8 +84,7 @@ if (rowUsers.cnt === 0) {
     // administadores
     { username: "admin", password: "Admin2026*", role: "admin" },
     
-    //jefes de carrera
-    { username: "usuario1", password: "Clave124*", role: "user" },
+   
   
   ];
 
@@ -101,6 +100,7 @@ if (rowUsers.cnt === 0) {
 
   console.log("Usuarios iniciales creados:");
   console.log("admin / Admin2026*");
+
 }
 
 // ---------- Helpers ----------
